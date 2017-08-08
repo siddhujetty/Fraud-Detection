@@ -26,8 +26,8 @@ b) Read datasets
 ```{r}
 root_directory <- ""
 setwd(root_directory)
-data = read.csv("./Input/Fraud_Data.csv")
-ip_addresses = read.csv("./Input/IpAddress_to_Country.csv")
+data = read.csv("./Fraud_Data.csv")
+ip_addresses = read.csv("./IpAddress_to_Country.csv")
 ```
 
 
