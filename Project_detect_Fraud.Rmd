@@ -1,0 +1,139 @@
+---
+title: "Detecting Fraudulent Activities"
+author: "Siddhartha Jetti"
+date: "December 02, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# 1. Problem Defnition
+E-commerce websites deal with a high risk of users performing fraudulent activities.
+Machine Learning really excels at identifying fraudulent activities.The goal of this project is to build a machine learning model that predicts the probability that the first transaction of a new user is fraudulent.
+
+a) Load libraries
+```{r}
+library(dplyr)
+library(randomForest)
+library(ROCR)
+```
+
+b) Read datasets
+```{r}
+root_directory <- ""
+setwd(root_directory)
+data = read.csv("./Input/Fraud_Data.csv")
+ip_addresses = read.csv("./Input/IpAddress_to_Country.csv")
+```
+
+
+# 2. Process Data
+
+Check existence of duplicates
+```{r}
+nrow(data) == length(unique(data$user_id))
+```
+Add country to original dataset based on ip addresses
+```{r}
+data_country = rep(NA, nrow(data))
+for (i in 1: nrow(data)){
+tmp = as.character(ip_addresses [data$ip_address[i] >= ip_addresses$lower_bound_ip_address & data$ip_address[i] <= ip_addresses$upper_bound_ip_address,"country"])
+if (length(tmp) == 1) {data_country[i] = tmp}
+}
+data$country = data_country
+data[, "signup_time"] = as.POSIXct(data[, "signup_time"], tz="GMT")
+data[, "purchase_time"] = as.POSIXct(data[, "purchase_time"], tz="GMT")
+summary(as.factor(data$country))
+```
+
+# 3 Feature Engineering
+A few obvious variables that can be created here could be:
+1. Time difference between sign-up time and purchase time
+2. If the device id is unique or certain users are sharing the same device (many different user ids using the same device could be an indicator of fake accounts).
+3. Many different users having the same ip address could be an indicator of
+fake accounts.
+4. Usual week of the year and day of the week from time variables.
+
+Compute time difference between purchase and signup
+```{r}
+data$purchase_signup_diff = as.numeric(difftime(as.POSIXct(data$purchase_time, tz="GMT"), as.POSIXct(data$signup_time, tz="GMT"), unit="secs"))
+
+```
+
+check for each device id/ip address how many different users had it
+```{r}
+
+data <- data %>%
+  group_by(device_id) %>%
+  mutate (device_id_count = n())
+
+data <- data %>%
+  group_by(ip_address) %>% 
+  mutate (ip_address_count = n())
+
+```
+
+Day of the week and week of the year
+```{r}
+data$signup_time_wd = format(data$signup_time, "%A")
+data$purchase_time_wd = format(data$purchase_time, "%A" )
+data$signup_time_wy = as.numeric(format(data$signup_time, "%U"))
+data$purchase_time_wy = as.numeric(format(data$purchase_time, "%U" ))
+
+```
+
+Drop unwanted variables from dataset
+```{r}
+data_rf = data[, -c(1:3, 5)]
+```
+
+keep the top 50 countries and everything else is "other"
+```{r}
+
+data_rf$country[is.na(data_rf$country)]="Not_found"
+data_rf$country = ifelse(data_rf$country %in% names(sort(table(data_rf$country),decreasing = TRUE))[51:length(unique(data_rf$country))],"Other", as.character(data_rf$country))
+
+```
+
+Process required variables
+```{r}
+#make class a factor
+data_rf$class = as.factor(data_rf$class)
+#all characters become factors
+data_rf[sapply(data_rf, is.character)] <- lapply(data_rf[sapply(data_rf, is.character)], as.factor)
+
+```
+
+# 4. Train models and score test dataset
+The model is fit using 2/3 of data as training and remaining 1/3 of the data as test dataset.
+```{r}
+train_sample = sample(nrow(data_rf), size = nrow(data)*0.66)
+train_data = data_rf[train_sample,]
+test_data = data_rf[-train_sample,]
+```
+
+For the given problem lets choose random forest method for prediction. The random forests usually
+require very little time to optimize it (its default params are often close to the best ones) and are robust with outliers, irrelevant variables, continuous and discrete variables. Also they  provide partial dependence plots and variable importance to get insights about how information is derived from the variables. The Random forest method is known to be flexible and has relatively lower variance than an individual tree.
+```{r}
+rf = randomForest(y=train_data$class, x = train_data[, -7],ytest = test_data$class, 
+                  xtest = test_data[, -7],ntree = 50, mtry = 3, keep.forest = TRUE)
+print(rf)
+```
+
+
+```{r}
+#let's combine in one data set model predictions and actual values.
+#The first column are the actual classes in our test set and the second are the predicted scores
+rf_results = data.frame (true_values = test_data$class,predictions = rf$test$votes[,2])
+pred = prediction (rf_results$predictions, rf_results$true_values)
+#plot the ROC and look at true positive vs false positive
+perf = performance (pred, measure = 'tpr', x.measure = "fpr")
+plot(perf) + abline(a=0, b=1, col = 'red') # the red line is randomness
+```
+
+# 5. Conclusion.
+The model produces the probability of a new user committing fraud and a suitable cut-off probability must be selected to classify a particular user as fraud.By default random forest method uses 0.5 as cutoff.If priority is to minimize false positive, a cut-off that gives true positive rate of ~0.5 and false positive rate almost zero (this was essentially the random forest output) should be chosen. However, if we care about maximizing true positive, we will have to decrease the cut-off. This way we will classify more events as “1”: some will be true ones (so true positive goes up) and many unfortunately, will be false ones (so false positive will also go up).
